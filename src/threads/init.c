@@ -5,6 +5,7 @@
 #include <limits.h>
 #include <random.h>
 #include <stddef.h>
+#include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -134,6 +135,40 @@ pintos_init (void)
     run_actions (argv);
   } else {
     // TODO: no command line passed to kernel. Run interactively 
+
+    while(1){
+      printf("PKUOS>");
+      char buf[64];
+      int idx=0;
+
+      // 解析鍵盤輸入
+      while(1){
+        uint8_t input = input_getc();
+        // 確認使用者enter
+        if (input == '\r' || input == '\n'){
+          printf("\n");
+          buf[idx] = '\0';
+          break;
+        }
+        else if (isprint(input)) {
+          printf("%c", input);
+          if (idx < 63){
+            buf[idx] = input;
+            idx++;
+          }
+        }
+      }
+
+      //比較eval
+      if (strcmp(buf,"whoami") == 0){
+        printf ("my id 6134***97\n");
+      } else if (strcmp(buf,"exit") == 0){
+        printf("user exit\n");
+        break;
+      } else{
+        printf("invalid command\n");
+      }
+    }
   }
 
   /* Finish up. */
