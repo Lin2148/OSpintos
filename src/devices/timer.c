@@ -30,6 +30,10 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
+// sleep list 
+static struct list sleep_list;
+
+
 /** Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
 void
@@ -37,6 +41,9 @@ timer_init (void)
 {
   pit_configure_channel (0, 2, TIMER_FREQ);
   intr_register_ext (0x20, timer_interrupt, "8254 Timer");
+
+  // init sleep list
+  list_init (&sleep_list);
 }
 
 /** Calibrates loops_per_tick, used to implement brief delays. */
@@ -89,11 +96,27 @@ timer_elapsed (int64_t then)
 void
 timer_sleep (int64_t ticks) 
 {
+  // 存入前可以開中斷 就算超時 也沒關係 只是晚一點起床
   int64_t start = timer_ticks ();
-
+  // 斷言是on否則panic
   ASSERT (intr_get_level () == INTR_ON);
+
+  // 取得目前執行的t 設定它的醒來時間
+  struct thread *cur = thread_current();
+  cur -> wakeuptick = start + ticks;
+
+  // 關intr 存入sleep list   intr_disable回傳值是關閉前的狀態 做完再還原 避免亂開關
+  enum intr_level old_level = intr_disable ();
+  // list_end回傳tail 放在tail前面 等價push_back
+  list_insert (list_end(&sleep_list), &cur->elem);
+  thread_block();
+  intr_set_level (old_level); 
+
+
+    /* 修改舊的busy waiting
   while (timer_elapsed (start) < ticks) 
     thread_yield ();
+  */
 }
 
 /** Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -170,7 +193,24 @@ timer_print_stats (void)
 static void
 timer_interrupt (struct intr_frame *args UNUSED)
 {
+  // 硬體或OS呼叫的全域tick 
   ticks++;
+  // 判斷sleeplist 有無可以叫醒的t, s指標做迴圈用
+  struct list_elem *e;
+  for (e = list_begin (&sleep_list); e != list_end (&sleep_list); e = list_next (e)) {
+    // 喚醒反轉後 比較喚醒時間跟tick 
+    struct thread  *t = list_entry (e, struct thread, elem);
+    // 判斷t的時間 可以睡醒把它移出sleep_list
+    if (t->wakeuptick <= ticks){
+      struct list_elem *pre_elem = list_prev(e);
+      list_remove(e);
+      e = pre_elem;
+      // unblock同時放回ready_list 看thread.c原碼
+      thread_unblock(t);
+      // 檢查這個放回ready的 跟執行中的t 權限  高的話換他running
+    }
+  }
+  // 目前執行t的tick 也++ 後續判斷priority等等
   thread_tick ();
 }
 

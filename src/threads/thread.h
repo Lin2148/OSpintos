@@ -90,6 +90,9 @@ struct thread
     int priority;                       /**< Priority. */
     struct list_elem allelem;           /**< List element for all threads list. */
 
+    // 建立一個紀錄何時醒來的時間屬性
+    int64_t wakeuptick;
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
 

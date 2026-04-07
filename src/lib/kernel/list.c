@@ -404,6 +404,7 @@ inplace_merge (struct list_elem *a0, struct list_elem *a1b0,
 void
 list_sort (struct list *list, list_less_func *less, void *aux)
 {
+  // 整個list重新排序
   size_t output_run_cnt;        /**< Number of runs output in current pass. */
 
   ASSERT (list != NULL);
@@ -446,6 +447,7 @@ void
 list_insert_ordered (struct list *list, struct list_elem *elem,
                      list_less_func *less, void *aux)
 {
+  //排序 根據less函式+aux參數
   struct list_elem *e;
 
   ASSERT (list != NULL);

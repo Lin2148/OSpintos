@@ -71,6 +71,11 @@ static void schedule (void);
 void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
+
+//新增的forward declaration
+static bool thread_priority_less_func (const struct list_elem *a, const struct list_elem *b, void *aux);
+
+
 /** Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
    general and it is possible in this case only because loader.S
@@ -237,7 +242,10 @@ thread_unblock (struct thread *t)
 
   old_level = intr_disable ();
   ASSERT (t->status == THREAD_BLOCKED);
+  /*  把本來直接塞到readylist尾端改成 透過priority決定
   list_push_back (&ready_list, &t->elem);
+  */
+  list_insert_ordered(&ready_list, &t->elem, thread_priority_less_func, NULL);
   t->status = THREAD_READY;
   intr_set_level (old_level);
 }
@@ -307,8 +315,12 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) 
+  if (cur != idle_thread) {
+    list_insert_ordered(&ready_list, &cur->elem, thread_priority_less_func, NULL);
+  }
+  /*
     list_push_back (&ready_list, &cur->elem);
+  */
   cur->status = THREAD_READY;
   schedule ();
   intr_set_level (old_level);
@@ -336,6 +348,15 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+  // readylist裡面有東西 比較new_priority跟begin node的priority
+  if (!list_empty (&ready_list)) {
+    struct list_elem *bigin_node_elem = list_begin (&ready_list);
+    struct thread *begin_node = list_entry (bigin_node_elem, struct thread, elem);
+    
+    if (begin_node->priority > thread_current()->priority){
+      thread_yield();
+    }
+  }
 }
 
 /** Returns the current thread's priority. */
@@ -578,6 +599,23 @@ allocate_tid (void)
 
   return tid;
 }
+
+/** comparator to decide higher priority thread at ready list in front of lower ones 
+ *  實作list_less_func -> Returns true if A is less than B
+*/
+static bool thread_priority_less_func (const struct list_elem *a,
+                                        const struct list_elem *b,
+                                        void *aux)
+{
+  // 先取得thread
+  struct thread *t_a = list_entry (a, struct thread, elem);
+  struct thread *t_b = list_entry (b, struct thread, elem);
+
+  // 根據t的priority屬性來排序   
+  return t_a->priority > t_b->priority;
+}
+
+
 
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
