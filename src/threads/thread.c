@@ -190,16 +190,7 @@ thread_tick (void)
         }
       }
     }
-    
-    /*// 假設這個是在更新優先權的迴圈裡，t 是指標指向 thread
-    if (strcmp(t->name, "idle") != 0) {
-        // 把定點數轉成整數印出來看比較直覺，或者乘以 100 看小數兩位
-        printf("Tick: %lld, Thread: %s, nice: %d, recent_cpu(int): %d, priority: %d\n",
-              timer_ticks(), t->name, t->nice, fp_to_int_round_nearest(t->recent_cpu), t->priority);
-    }
-    */
   } 
-
 }
 
 /** Prints thread statistics. */
@@ -387,9 +378,15 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
-  if (cur != idle_thread) {
-    list_insert_ordered(&ready_list, &cur->elem, thread_priority_less_func, NULL);
-  }
+  if (!list_empty(&ready_list) && 
+        cur->priority <= list_entry(list_back(&ready_list), struct thread, elem)->priority) {
+        // priority小 直接推到尾端 省時間
+          list_push_back(&ready_list, &cur->elem);
+    } else {
+        // 排序
+        list_insert_ordered(&ready_list, &cur->elem, thread_priority_less_func, NULL);
+    }
+
   /*
     list_push_back (&ready_list, &cur->elem);
   */

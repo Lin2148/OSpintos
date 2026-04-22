@@ -30,9 +30,9 @@ static void busy_wait (int64_t loops);
 static void real_time_sleep (int64_t num, int32_t denom);
 static void real_time_delay (int64_t num, int32_t denom);
 
-// sleep list 
+//新增的forward declaration
 static struct list sleep_list;
-
+static bool sleep_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) ;
 
 /** Sets up the timer to interrupt TIMER_FREQ times per second,
    and registers the corresponding interrupt. */
@@ -107,8 +107,8 @@ timer_sleep (int64_t ticks)
 
   // 關intr 存入sleep list   intr_disable回傳值是關閉前的狀態 做完再還原 避免亂開關
   enum intr_level old_level = intr_disable ();
-  // list_end回傳tail 放在tail前面 等價push_back
-  list_insert (list_end(&sleep_list), &cur->elem);
+  // 排序sleep_list
+  list_insert_ordered (&sleep_list, &cur->elem, sleep_less_func, NULL);
   thread_block();
   intr_set_level (old_level); 
 
@@ -195,26 +195,29 @@ timer_interrupt (struct intr_frame *args UNUSED)
 {
   // 硬體或OS呼叫的全域tick 
   ticks++;
-  // 判斷sleeplist 有無可以叫醒的t, s指標做迴圈用
-  struct list_elem *e;
-  for (e = list_begin (&sleep_list); e != list_end (&sleep_list); e = list_next (e)) {
+
+  // 目前執行t的tick 也++ 後續判斷priority等等
+  thread_tick ();
+
+  // 判斷sleeplist 最前面開始能否叫醒
+  while (!list_empty(&sleep_list)) {
     // 喚醒反轉後 比較喚醒時間跟tick 
-    struct thread  *t = list_entry (e, struct thread, elem);
+    struct thread *t = list_entry(list_front(&sleep_list), struct thread, elem);
     // 判斷t的時間 可以睡醒把它移出sleep_list
     if (t->wakeuptick <= ticks){
-      struct list_elem *pre_elem = list_prev(e);
-      list_remove(e);
-      e = pre_elem;
+      list_pop_front(&sleep_list);
       // unblock同時放回ready_list 看thread.c原碼
       thread_unblock(t);
-      // 檢查這個放回ready的 跟執行中的t 權限，高的話換他running
+
+      // 檢查這個unblock放回ready的 跟執行中的t 權限，高的話換他running
       if (t->priority > thread_current()->priority) {
         intr_yield_on_return(); 
       }
+    } else {
+      // 如果sleep list頭不能醒來 提前end  
+      break;
     }
   }
-  // 目前執行t的tick 也++ 後續判斷priority等等
-  thread_tick ();
 }
 
 /** Returns true if LOOPS iterations waits for more than one timer
@@ -286,4 +289,10 @@ real_time_delay (int64_t num, int32_t denom)
      the possibility of overflow. */
   ASSERT (denom % 1000 == 0);
   busy_wait (loops_per_tick * num / 1000 * TIMER_FREQ / (denom / 1000)); 
+}
+
+static bool sleep_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED) {
+    struct thread *ta = list_entry (a, struct thread, elem);
+    struct thread *tb = list_entry (b, struct thread, elem);
+    return ta->wakeuptick < tb->wakeuptick;
 }
