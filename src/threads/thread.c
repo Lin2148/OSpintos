@@ -14,6 +14,8 @@
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
+#include "threads/fixed_point.h"
+#include "devices/timer.h"
 
 /** Random value for struct thread's `magic' member.
    Used to detect stack overflow.  See the big comment at the top
@@ -72,9 +74,12 @@ void thread_schedule_tail (struct thread *prev);
 static tid_t allocate_tid (void);
 
 
-//新增的forward declaration
+/**新增的forward declaration */
 static bool thread_priority_less_func (const struct list_elem *a, const struct list_elem *b, void *aux);
-
+static fp_t load_avg;
+static void mlfqs_calculate_priority(struct thread *t, void *aux UNUSED);
+static void mlfqs_calculate_recent_cpu (struct thread *t, void *aux UNUSED);
+static void mlfqs_calculate_load_avg (void);
 
 /** Initializes the threading system by transforming the code
    that's currently running into a thread.  This can't work in
@@ -103,6 +108,14 @@ thread_init (void)
   init_thread (initial_thread, "main", PRI_DEFAULT);
   initial_thread->status = THREAD_RUNNING;
   initial_thread->tid = allocate_tid ();
+  
+  // MLFQS模式
+  if (thread_mlfqs) {
+    initial_thread->nice = 0;
+    initial_thread->recent_cpu = 0; 
+    load_avg = int_to_fp(0);
+    mlfqs_calculate_priority (initial_thread, NULL);
+  }
 }
 
 /** Starts preemptive thread scheduling by enabling interrupts.
@@ -127,6 +140,7 @@ thread_start (void)
 void
 thread_tick (void) 
 {
+  //軟體層面的 timer interrupt handler最後一步會呼叫這個函式
   struct thread *t = thread_current ();
 
   /* Update statistics. */
@@ -142,6 +156,50 @@ thread_tick (void)
   /* Enforce preemption. */
   if (++thread_ticks >= TIME_SLICE)
     intr_yield_on_return ();
+
+  // MLFQS 模式 從timer全域時間來確認是否更新
+  if (thread_mlfqs){
+    int64_t tick = timer_ticks ();
+
+    // recent cpu 先計算
+    struct thread *t = thread_current();
+    if (t != idle_thread){
+      t->recent_cpu = fp_int_add(t->recent_cpu, 1);
+    }
+
+    //全域load_avg要先更新
+    if (tick % TIMER_FREQ == 0){
+      mlfqs_calculate_load_avg();
+
+      // rec_cpu會用到load_avg 要後算
+      thread_foreach (mlfqs_calculate_recent_cpu, NULL);
+      
+    }
+
+    // 4 tick 的邏輯 cal_pri會用到rec_cpu 要後算
+    if (tick % 4 == 0){
+      thread_foreach (mlfqs_calculate_priority, NULL);
+
+      // p算完後，重新排列然後檢查是否目前為最高權限 否則放棄CPU
+      list_sort(&ready_list, thread_priority_less_func, NULL);
+      if (!list_empty(&ready_list)) {
+        struct thread *highest_ready_thread = list_entry(list_front(&ready_list), struct thread, elem);
+        if (thread_current()->priority < highest_ready_thread->priority) {
+        // 在timer_intr裡面 不能用yield()
+          intr_yield_on_return(); 
+        }
+      }
+    }
+    
+    /*// 假設這個是在更新優先權的迴圈裡，t 是指標指向 thread
+    if (strcmp(t->name, "idle") != 0) {
+        // 把定點數轉成整數印出來看比較直覺，或者乘以 100 看小數兩位
+        printf("Tick: %lld, Thread: %s, nice: %d, recent_cpu(int): %d, priority: %d\n",
+              timer_ticks(), t->name, t->nice, fp_to_int_round_nearest(t->recent_cpu), t->priority);
+    }
+    */
+  } 
+
 }
 
 /** Prints thread statistics. */
@@ -188,6 +246,15 @@ thread_create (const char *name, int priority,
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
 
+  // MLFQS模式 current()找parent(目前呼叫的t) 
+  if (thread_mlfqs) {
+      t->nice = thread_current()->nice;
+      t->recent_cpu = thread_current()->recent_cpu;
+      
+      mlfqs_calculate_priority(t, NULL); 
+      
+  }
+
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame (t, sizeof *kf);
   kf->eip = NULL;
@@ -205,6 +272,11 @@ thread_create (const char *name, int priority,
 
   /* Add to run queue. */
   thread_unblock (t);
+
+  // 建立完立刻判斷是否搶CPU
+  if (t->priority > thread_current()->priority) {
+        thread_yield();
+      }
 
   return tid;
 }
@@ -348,6 +420,7 @@ void
 thread_set_priority (int new_priority) 
 {
   thread_current ()->priority = new_priority;
+
   // readylist裡面有東西 比較new_priority跟begin node的priority
   if (!list_empty (&ready_list)) {
     struct list_elem *bigin_node_elem = list_begin (&ready_list);
@@ -368,33 +441,47 @@ thread_get_priority (void)
 
 /** Sets the current thread's nice value to NICE. */
 void
-thread_set_nice (int nice UNUSED) 
+thread_set_nice (int nice ) 
 {
-  /* Not yet implemented. */
+  if (nice > 20) nice = 20;
+  if (nice < -20) nice = -20;
+  
+  struct thread *t = thread_current();
+  t->nice = nice;
+
+  // 設定完nice但要重新算priority 如果不是最大了 yield讓出CPU
+  mlfqs_calculate_priority (t, NULL);
+
+  // 比readylist最前面的t跟cur  
+  if (!list_empty(&ready_list)){   
+    //取最前面的t(排序過了)
+    struct thread *highest_ready = list_entry (list_front(&ready_list), struct thread, elem);
+    if (highest_ready->priority > t->priority){
+      thread_yield();
+    }
+  }
 }
 
 /** Returns the current thread's nice value. */
 int
 thread_get_nice (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return thread_current ()-> nice;
 }
 
 /** Returns 100 times the system load average. */
 int
 thread_get_load_avg (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  return fp_to_int_round_nearest (fp_int_mul (load_avg, 100));
 }
 
 /** Returns 100 times the current thread's recent_cpu value. */
 int
 thread_get_recent_cpu (void) 
 {
-  /* Not yet implemented. */
-  return 0;
+  fp_t fp = fp_int_mul(thread_current()->recent_cpu, 100);
+  return fp_to_int_round_nearest(fp);
 }
 
 /** Idle thread.  Executes when no other thread is ready to run.
@@ -601,11 +688,11 @@ allocate_tid (void)
 }
 
 /** comparator to decide higher priority thread at ready list in front of lower ones 
- *  實作list_less_func -> Returns true if A is less than B
+ *  實作list_less_func -> Returns true if A < B
 */
 static bool thread_priority_less_func (const struct list_elem *a,
                                         const struct list_elem *b,
-                                        void *aux)
+                                        void *aux UNUSED)
 {
   // 先取得thread
   struct thread *t_a = list_entry (a, struct thread, elem);
@@ -620,3 +707,53 @@ static bool thread_priority_less_func (const struct list_elem *a,
 /** Offset of `stack' member within `struct thread'.
    Used by switch.S, which can't figure it out on its own. */
 uint32_t thread_stack_ofs = offsetof (struct thread, stack);
+
+/** 實作cal priority的數學公式 */
+static void mlfqs_calculate_priority(struct thread *t, void *aux UNUSED){
+  int fp1 = int_to_fp (PRI_MAX);
+  int fp2 = fp_int_div (t->recent_cpu, 4);
+  int fp3 = int_to_fp (t->nice);
+  int fp4 = fp_int_mul (fp3, 2);
+
+  fp_t fp_pri = fp_sub(fp_sub(fp1, fp2), fp4);
+
+  //轉回int 後判斷max min權限
+  int result = fp_to_int_round_zero(fp_pri);
+  if (result > 63) {
+    result = PRI_MAX;
+  }
+  if (result < 0){
+    result = PRI_MIN;
+  }
+
+  t->priority = result;
+}
+
+
+/** 實作update recent_cpu的數學公式 */
+static void mlfqs_calculate_recent_cpu (struct thread *t, void *aux UNUSED){
+  fp_t fp1 = fp_int_mul (load_avg, 2);
+  fp_t fp2 = fp_int_add (fp1, 1);
+  fp_t fp3 = fp_div (fp1, fp2);
+  fp_t fp4 = fp_mul(fp3, t->recent_cpu);
+
+  t->recent_cpu = fp_int_add(fp4, t->nice);
+
+}
+
+static void mlfqs_calculate_load_avg (void) {
+
+  int ready_threads = list_size (&ready_list);
+  
+  // 如果目前正在執行的不是 idle_thread，它也要算進負載裡
+  if (thread_current () != idle_thread) {
+      ready_threads++;
+  }
+
+  fp_t fp1 = fp_int_mul (load_avg, 59);
+  fp_t fp2 = fp_int_div (fp1, 60);
+  fp_t fp3 = int_to_fp (ready_threads);
+  fp_t fp4 = fp_int_div (fp3, 60);
+  
+  load_avg = fp_add (fp2, fp4);
+}

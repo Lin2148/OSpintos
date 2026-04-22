@@ -24,6 +24,13 @@ typedef int tid_t;
 #define PRI_DEFAULT 31                  /**< Default priority. */
 #define PRI_MAX 63                      /**< Highest priority. */
 
+// 運算子多載 e.g. 非法 struct + struct
+/** 定點數別名-不額外定義struct fp避免運算子多載 */
+typedef int fp_t;
+
+
+
+
 /** A kernel thread or user process.
 
    Each thread structure is stored in its own 4 kB page.  The
@@ -89,12 +96,17 @@ struct thread
     uint8_t *stack;                     /**< Saved stack pointer. */
     int priority;                       /**< Priority. */
     struct list_elem allelem;           /**< List element for all threads list. */
-
-    // 建立一個紀錄何時醒來的時間屬性
+   
+    /** 建立一個紀錄何時醒來的時間成員 */
     int64_t wakeuptick;
 
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
+
+
+    /** 建立MLFQS需要的成員, 其中recent_cpu是FP  */
+    int nice;
+    fp_t recent_cpu;
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -136,6 +148,13 @@ void thread_foreach (thread_action_func *, void *);
 int thread_get_priority (void);
 void thread_set_priority (int);
 
+int thread_get_nice (void);
+void thread_set_nice (int);
+int thread_get_recent_cpu (void);
+int thread_get_load_avg (void);
+
+
+// MLFQS提供的方法 
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);

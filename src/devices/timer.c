@@ -207,7 +207,10 @@ timer_interrupt (struct intr_frame *args UNUSED)
       e = pre_elem;
       // unblock同時放回ready_list 看thread.c原碼
       thread_unblock(t);
-      // 檢查這個放回ready的 跟執行中的t 權限  高的話換他running
+      // 檢查這個放回ready的 跟執行中的t 權限，高的話換他running
+      if (t->priority > thread_current()->priority) {
+        intr_yield_on_return(); 
+      }
     }
   }
   // 目前執行t的tick 也++ 後續判斷priority等等
