@@ -17,13 +17,13 @@ bool sema_try_down (struct semaphore *);
 void sema_up (struct semaphore *);
 void sema_self_test (void);
 
-/** Lock. */
+/** Lock. mutex只能自己解開*/
 struct lock 
   {
     struct thread *holder;      /**< Thread holding lock (for debugging). */
     struct semaphore semaphore; /**< Binary semaphore controlling access. */
+    struct list_elem elem;       // 給lock_heldlist用的鉤子
   };
-
 void lock_init (struct lock *);
 void lock_acquire (struct lock *);
 bool lock_try_acquire (struct lock *);
@@ -33,7 +33,7 @@ bool lock_held_by_current_thread (const struct lock *);
 /** Condition variable. */
 struct condition 
   {
-    struct list waiters;        /**< List of waiting threads. */
+    struct list waiters;        /**< List of waiting threads. 用sema_elem代表 */
   };
 
 void cond_init (struct condition *);

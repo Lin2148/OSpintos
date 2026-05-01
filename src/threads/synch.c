@@ -32,6 +32,9 @@
 #include "threads/interrupt.h"
 #include "threads/thread.h"
 
+static bool cv_priority_less_func( const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+void lock_recursion_check(struct lock *lock, int priority);
+
 /** Initializes semaphore SEMA to VALUE.  A semaphore is a
    nonnegative integer along with two atomic operators for
    manipulating it:
@@ -111,12 +114,25 @@ sema_up (struct semaphore *sema)
   enum intr_level old_level;
 
   ASSERT (sema != NULL);
-
+  
   old_level = intr_disable ();
-  if (!list_empty (&sema->waiters)) 
-    thread_unblock (list_entry (list_pop_front (&sema->waiters),
-                                struct thread, elem));
+
+  struct thread *highest_waiter = NULL;
+  // 改waiter的邏輯 變成 裡面p最高的先喚醒
+  if (!list_empty (&sema->waiters)) {
+    list_sort(&sema->waiters, thread_priority_less_func, NULL);
+
+    highest_waiter = list_entry (list_pop_front (&sema->waiters), struct thread, elem); 
+    thread_unblock (highest_waiter);
+  }
+
   sema->value++;
+
+  // 判斷是否yield 非中斷且unblock那個t權限比較高再yield
+  if (highest_waiter != NULL && !intr_context() && highest_waiter->priority > thread_current()->priority){
+    thread_yield();
+  }
+
   intr_set_level (old_level);
 }
 
@@ -196,8 +212,20 @@ lock_acquire (struct lock *lock)
   ASSERT (!intr_context ());
   ASSERT (!lock_held_by_current_thread (lock));
 
-  sema_down (&lock->semaphore);
-  lock->holder = thread_current ();
+  struct thread *curr = thread_current();
+
+  // 沒拿到lock代表失敗 進入if， 判斷+拿與否 為atomic 
+  if (!lock_try_acquire(lock)){
+    curr->lock_wait_for = lock;
+    lock_recursion_check(lock, curr->priority);
+    sema_down (&lock->semaphore);  //這一步拿資源 拿不到睡覺
+    
+    //有醒來了 修改curr等待者 跟lock持有人
+    curr->lock_wait_for = NULL;
+    lock->holder = curr;
+  }
+  //成功拿到鎖了 把locklist跟鉤子 位址當參數傳給pushback
+  list_push_back (&curr->lock_heldlist, &lock->elem);
 }
 
 /** Tries to acquires LOCK and returns true if successful or false
@@ -231,6 +259,13 @@ lock_release (struct lock *lock)
   ASSERT (lock != NULL);
   ASSERT (lock_held_by_current_thread (lock));
 
+ 
+  struct thread *curr = thread_current();
+
+  // list移除 並還原捐贈
+  list_remove(&(lock->elem));
+  thread_update_priority(curr);
+
   lock->holder = NULL;
   sema_up (&lock->semaphore);
 }
@@ -251,6 +286,7 @@ struct semaphore_elem
   {
     struct list_elem elem;              /**< List element. */
     struct semaphore semaphore;         /**< This semaphore. */
+    struct thread *waiter_thread;
   };
 
 /** Initializes condition variable COND.  A condition variable
@@ -287,17 +323,25 @@ cond_init (struct condition *cond)
 void
 cond_wait (struct condition *cond, struct lock *lock) 
 {
+  //裝的不是thread而是sema_elem，裡面有一個sema 鉤子 thread當下的P
   struct semaphore_elem waiter;
-
+  
   ASSERT (cond != NULL);
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
   ASSERT (lock_held_by_current_thread (lock));
   
+  //初始化0，如果sema_down就會睡覺
   sema_init (&waiter.semaphore, 0);
+  waiter.waiter_thread = thread_current();
+  //鉤子掛到CV的waiters list
   list_push_back (&cond->waiters, &waiter.elem);
   lock_release (lock);
+  
+  //睡覺
   sema_down (&waiter.semaphore);
+  
+  //有人呼叫CV signal 醒來 嘗試搶鎖 沒搶到繼續睡
   lock_acquire (lock);
 }
 
@@ -314,11 +358,16 @@ cond_signal (struct condition *cond, struct lock *lock UNUSED)
   ASSERT (cond != NULL);
   ASSERT (lock != NULL);
   ASSERT (!intr_context ());
+  // 呼叫前提 為拿到lock, intr_handler永遠拿不到 不會呼叫這個方法  可不開中斷  
   ASSERT (lock_held_by_current_thread (lock));
+  
 
-  if (!list_empty (&cond->waiters)) 
-    sema_up (&list_entry (list_pop_front (&cond->waiters),
-                          struct semaphore_elem, elem)->semaphore);
+  //把CV的waiter list排序  給sema_up處理後續yield跟選優先權
+  if (!list_empty (&cond->waiters)) {
+    list_sort(&cond->waiters, cv_priority_less_func, NULL);
+    sema_up (&list_entry (list_pop_front (&cond->waiters), struct semaphore_elem, elem)->semaphore);
+  }
+    
 }
 
 /** Wakes up all threads, if any, waiting on COND (protected by
@@ -335,4 +384,29 @@ cond_broadcast (struct condition *cond, struct lock *lock)
 
   while (!list_empty (&cond->waiters))
     cond_signal (cond, lock);
+}
+
+static bool cv_priority_less_func( const struct list_elem *a,
+                                        const struct list_elem *b,
+                                        void *aux UNUSED)
+{
+  // 先取得sema_elem
+  struct semaphore_elem *sema_a = list_entry (a, struct semaphore_elem, elem);
+  struct semaphore_elem *sema_b = list_entry (b, struct semaphore_elem, elem);
+
+
+  // 根據t的priority屬性來排序   
+  return sema_a->waiter_thread->priority > sema_b->waiter_thread->priority;
+}
+
+/** 在巢狀捐贈 索取lock時使用 */
+void lock_recursion_check(struct lock *lock, int priority)
+{
+  if (lock == NULL){
+      return;
+    }
+  if (priority > lock->holder->priority){
+    lock->holder->priority = priority;
+    lock_recursion_check(lock->holder->lock_wait_for, priority);
+  }
 }

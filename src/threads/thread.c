@@ -75,7 +75,7 @@ static tid_t allocate_tid (void);
 
 
 /**新增的forward declaration */
-static bool thread_priority_less_func (const struct list_elem *a, const struct list_elem *b, void *aux);
+bool thread_priority_less_func (const struct list_elem *a, const struct list_elem *b, void *aux);
 static fp_t load_avg;
 static void mlfqs_calculate_priority(struct thread *t, void *aux UNUSED);
 static void mlfqs_calculate_recent_cpu (struct thread *t, void *aux UNUSED);
@@ -378,6 +378,7 @@ thread_yield (void)
   ASSERT (!intr_context ());
 
   old_level = intr_disable ();
+  
   if (!list_empty(&ready_list) && 
         cur->priority <= list_entry(list_back(&ready_list), struct thread, elem)->priority) {
         // priority小 直接推到尾端 省時間
@@ -386,7 +387,11 @@ thread_yield (void)
         // 排序
         list_insert_ordered(&ready_list, &cur->elem, thread_priority_less_func, NULL);
     }
-
+  /*
+  if (cur != idle_thread) {
+      list_insert_ordered(&ready_list, &cur->elem, thread_priority_less_func, NULL);
+  }
+      */
   /*
     list_push_back (&ready_list, &cur->elem);
   */
@@ -416,17 +421,24 @@ thread_foreach (thread_action_func *func, void *aux)
 void
 thread_set_priority (int new_priority) 
 {
-  thread_current ()->priority = new_priority;
+  // 先設舊的原始p
+  struct thread *curr = thread_current ();
+  curr->before_donate_priority = new_priority;
 
   // readylist裡面有東西 比較new_priority跟begin node的priority
+  thread_update_priority(curr);
+
+  // 檢查
+  enum intr_level old_level = intr_disable();
+  // 前提 list 是由大到小排序 
   if (!list_empty (&ready_list)) {
-    struct list_elem *bigin_node_elem = list_begin (&ready_list);
-    struct thread *begin_node = list_entry (bigin_node_elem, struct thread, elem);
-    
-    if (begin_node->priority > thread_current()->priority){
-      thread_yield();
-    }
+    struct thread *highest_ready = list_entry (list_front (&ready_list), struct thread, elem);
+    if (thread_current ()->priority < highest_ready->priority) 
+      {
+        thread_yield ();
+      }
   }
+  intr_set_level(old_level);
 }
 
 /** Returns the current thread's priority. */
@@ -567,6 +579,11 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
+  t->before_donate_priority = priority;
+
+  //初始化新增的成員
+  list_init (&t->lock_heldlist);
+  t->lock_wait_for = NULL;
   t->magic = THREAD_MAGIC;
 
   old_level = intr_disable ();
@@ -687,7 +704,7 @@ allocate_tid (void)
 /** comparator to decide higher priority thread at ready list in front of lower ones 
  *  實作list_less_func -> Returns true if A < B
 */
-static bool thread_priority_less_func (const struct list_elem *a,
+bool thread_priority_less_func (const struct list_elem *a,
                                         const struct list_elem *b,
                                         void *aux UNUSED)
 {
@@ -753,4 +770,40 @@ static void mlfqs_calculate_load_avg (void) {
   fp_t fp4 = fp_int_div (fp3, 60);
   
   load_avg = fp_add (fp2, fp4);
+}
+
+
+
+
+/** 檢查set跟目前的p*/
+void thread_update_priority(struct thread *t)
+{
+  if (t == NULL) return;
+  enum intr_level old_level = intr_disable();
+  //先還原
+  int max_donate = t->before_donate_priority;
+
+  //判斷hold_list裡面 需不需要水平捐贈
+  if (!list_empty(&t->lock_heldlist)){
+    struct list_elem *e;
+    for (e = list_begin(&t->lock_heldlist); e != list_end(&t->lock_heldlist); e= list_next(e)){
+      struct lock *l = list_entry(e, struct lock, elem);
+
+      // 看lock的sema.waiter裡面有誰在等這把鎖 然後找最高權限t
+      if (!list_empty(&l->semaphore.waiters)) {
+        struct list_elem *e_waiter;
+        // 手動掃描等待這把鎖的所有 thread
+        for (e_waiter = list_begin(&l->semaphore.waiters); e_waiter != list_end(&l->semaphore.waiters); e_waiter = list_next(e_waiter)) {
+          struct thread *waiter = list_entry(e_waiter, struct thread, elem);
+          if (waiter->priority > max_donate) {
+              max_donate = waiter->priority;
+          }
+        }
+      }
+    }
+  }
+  //再次受到捐贈增加p 或本來的p
+  t->priority = max_donate;
+
+  intr_set_level(old_level);
 }

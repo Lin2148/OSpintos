@@ -103,10 +103,15 @@ struct thread
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /**< List element. */
 
-
     /** 建立MLFQS需要的成員, 其中recent_cpu是FP  */
     int nice;
     fp_t recent_cpu;
+
+    /** 建立priority donate需要的成員 */
+    int before_donate_priority;  // 捐贈前的低P
+    struct list lock_heldlist; // 持有的lock
+    struct lock *lock_wait_for; // 鎖住自己 指向卡住的那個lock  
+
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
@@ -159,5 +164,9 @@ int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
+
+// 給synch用的 判斷priority方法
+bool thread_priority_less_func (const struct list_elem *a, const struct list_elem *b, void *aux UNUSED);
+void thread_update_priority(struct thread *t);
 
 #endif /**< threads/thread.h */
