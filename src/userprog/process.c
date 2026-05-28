@@ -24,7 +24,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
-   thread id, or TID_ERROR if the thread cannot be created. */
+   thread id, or TID_ERROR if the thread cannot be created.  在init.c的run_task方法呼叫 所以帶參數usrprog第一個先執行這個方法 */
 tid_t
 process_execute (const char *file_name) 
 {
@@ -38,8 +38,15 @@ process_execute (const char *file_name)
     return TID_ERROR;
   strlcpy (fn_copy, file_name, PGSIZE);
 
+
+  // 截斷空格 留前面的真正名稱
+  char thread_name[16];
+  size_t name_len = strcspn (file_name, " ");
+  strlcpy (thread_name, file_name, name_len + 1);  // 尾端補\0
+
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (thread_name, PRI_DEFAULT, start_process, fn_copy);
+  // 改成用截斷的name tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   if (tid == TID_ERROR)
     palloc_free_page (fn_copy); 
   return tid;
@@ -98,6 +105,10 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
+  /* 如果是userprog才印， kernel不的pagedir=null不用印 */
+  if (cur->pagedir != NULL) {
+      printf ("%s: exit(%d)\n", cur->name, cur->exit_code);
+    }
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;

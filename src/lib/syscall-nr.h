@@ -1,7 +1,7 @@
 #ifndef __LIB_SYSCALL_NR_H
 #define __LIB_SYSCALL_NR_H
 
-/** System call numbers. */
+/** System call numbers. c的enum預設數字排序 */
 enum 
   {
     /* Projects 2 and later. */
