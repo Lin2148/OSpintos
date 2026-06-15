@@ -24,7 +24,7 @@ static bool load (const char *cmdline, void (**eip) (void), void **esp);
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
    before process_execute() returns.  Returns the new process's
-   thread id, or TID_ERROR if the thread cannot be created.  在init.c的run_task方法呼叫 所以帶參數usrprog第一個先執行這個方法 */
+   thread id, or TID_ERROR if the thread cannot be created.  在init.c的run_task方法呼叫 所以帶參數usrprog第一步先執行這個方法 */
 tid_t
 process_execute (const char *file_name) 
 {
@@ -57,9 +57,27 @@ process_execute (const char *file_name)
 static void
 start_process (void *file_name_)
 {
+  //這塊file是 p_exec 使用palloc得到的實體mem  這裡直接拿來用 
+  //轉回char*
   char *file_name = file_name_;
   struct intr_frame if_;
   bool success;
+
+  // 如果load完成後，stack建立 開始對參數切割並推入  ESP目前在stack最高處  EIP在 code segment準備執行Main不管
+  // 參數最大容量  宣告char* 因為一次代表1byte
+  char *argv_addresses[256];
+  // 暫存strtok_r結果
+  char *token_tmp[128];
+  int argc = 0;
+
+  char *token, *save_ptr;
+
+  // 先切token 全部切完後才處裡放參數 不然順序會顛倒
+  for (token = strtok_r (file_name, " ", &save_ptr); token != NULL; token = strtok_r (NULL, " ", &save_ptr)){
+    token_tmp[argc] = token;
+    argc++;
+  }
+
 
   /* Initialize interrupt frame and load executable. */
   memset (&if_, 0, sizeof if_);
@@ -67,12 +85,60 @@ start_process (void *file_name_)
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
   success = load (file_name, &if_.eip, &if_.esp);
-
+  
   /* If load failed, quit. */
-  palloc_free_page (file_name);
-  if (!success) 
+  if (!success) {
+    palloc_free_page (file_name);
     thread_exit ();
+  }
 
+
+  // 從參數尾端開始push進stack
+  for (int i = argc - 1; i >= 0; i--){
+    // (1) 計算長度加\0;
+    int token_len = strlen(token_tmp[i])+ 1;
+    // (2) if_.esp 往下減   不能直接改esp因為目前kernel在使用 
+    if_.esp = (char *)if_.esp - token_len;
+    // (3) memcpy 貼資料
+    memcpy(if_.esp, token_tmp[i], token_len);
+    // (4) 記位址
+    argv_addresses[i] = (char *) if_.esp;
+  }
+
+  // padding
+  void *old_esp = if_.esp;
+  if_.esp = (void *)((uintptr_t)if_.esp & ~3);
+  size_t padding_len = (char *)old_esp - (char *)if_.esp;
+  if (padding_len > 0) {
+      memset (if_.esp, 0, padding_len);
+  }
+
+  // argv[argc]= null
+  if_.esp = (char *)if_.esp - 4;
+  memset (if_.esp, 0, 4);
+
+  //存ptr address  往下4byte
+  for (int i = argc - 1; i >= 0; i--){
+    if_.esp = (char *)if_.esp - 4;
+    memcpy(if_.esp, &argv_addresses[i], 4);
+  }
+
+  //argv argc
+  void *argv_ptr = (char *)if_.esp;
+  if_.esp = (char *)if_.esp - 4;
+  memcpy(if_.esp, &argv_ptr, 4);
+
+  if_.esp = (char *)if_.esp - 4;
+  memcpy(if_.esp, &argc, 4);
+
+  // fake return add
+  int fake_return_address = 0;
+  if_.esp = (char *)if_.esp - 4;
+  memcpy(if_.esp, &fake_return_address, 4);
+
+
+  palloc_free_page (file_name);
+  hex_dump((uintptr_t)if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
