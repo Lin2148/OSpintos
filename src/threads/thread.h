@@ -112,9 +112,8 @@ struct thread
     struct list lock_heldlist; // 持有的lock
     struct lock *lock_wait_for; // 鎖住自己 指向卡住的那個lock  
 
-    /** proj2 usrprog要看exitcode */
+    /** proj2 usrprog要看exitcode, PD在下面 */
     int exit_code;
-
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
