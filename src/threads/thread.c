@@ -116,6 +116,8 @@ thread_init (void)
     load_avg = int_to_fp(0);
     mlfqs_calculate_priority (initial_thread, NULL);
   }
+
+  
 }
 
 /** Starts preemptive thread scheduling by enabling interrupts.
@@ -236,6 +238,7 @@ thread_create (const char *name, int priority,
   /* Initialize thread. */
   init_thread (t, name, priority);
   tid = t->tid = allocate_tid ();
+
 
   // MLFQS模式 current()找parent(目前呼叫的t) 
   if (thread_mlfqs) {
@@ -585,6 +588,10 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init (&t->lock_heldlist);
   t->lock_wait_for = NULL;
   t->magic = THREAD_MAGIC;
+
+  // file descriptor初始化
+  list_init(&t->file_descriptor);
+  t->next_fd = 2;
 
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);

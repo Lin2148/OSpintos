@@ -28,8 +28,25 @@ typedef int tid_t;
 /** 定點數別名-不額外定義struct fp避免運算子多載 */
 typedef int fp_t;
 
+/**代表存在file_descriptor裡面的elem */
+struct file_elem
+   {
+      int fd;
+      struct list_elem elem;
+      struct file *file_ptr;
+   };
 
+/**代表存在child_list裡面的elem */
+struct child_status 
+{
+   tid_t tid;
+   int exit_status; 
+   bool has_exited;
+   bool is_waited;  //防止重複 wait
 
+   struct semaphore wait_sema;   // 同步父子號誌
+   struct list_elem elem;  // 掛到child_list上  
+};
 
 /** A kernel thread or user process.
 
@@ -112,17 +129,32 @@ struct thread
     struct list lock_heldlist; // 持有的lock
     struct lock *lock_wait_for; // 鎖住自己 指向卡住的那個lock  
 
-    /** proj2 usrprog要看exitcode, PD在下面 */
-    int exit_code;
+
 
 #ifdef USERPROG
     /* Owned by userprog/process.c. */
+
     uint32_t *pagedir;                  /**< Page directory. */
+
 #endif
+    int exit_code;   //usrprog要看exitcode
+    struct list file_descriptor;   // 紀錄目前開了多少檔案的總表  
+    int next_fd;  // 下一個可以使用的fd編號
+    //每個開啟檔案的節點結構
+
+
+    // 處理父子p的問題
+    struct thread *parent;
+    struct list child_list;
+    struct child_status *my_status;
+
+
 
     /* Owned by thread.c. */
     unsigned magic;                     /**< Detects stack overflow. */
   };
+
+
 
 /** If false (default), use round-robin scheduler.
    If true, use multi-level feedback queue scheduler.

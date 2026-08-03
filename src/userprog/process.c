@@ -17,9 +17,19 @@
 #include "threads/palloc.h"
 #include "threads/thread.h"
 #include "threads/vaddr.h"
+#include "threads/synch.h"
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+
+/**
+ * 包裝p_exec要用的fname跟要丟給child的status struct
+ */
+struct exec_info {
+    char *file_name;
+    struct child_status *status;
+};
+
 
 /** Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -30,14 +40,38 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   tid_t tid;
+  // 建立child_status struct
+  struct child_status *child_stat = malloc(sizeof(struct child_status));
+  if (child_stat == NULL){
+    return TID_ERROR;
+  } 
+
+  //初始化struct
+  child_stat->has_exited = false;
+  child_stat->is_waited = false;
+  sema_init(&child_stat->wait_sema, 0);
+
+  // 建立exec_info struct
+  struct exec_info *info = malloc(sizeof(struct exec_info));
+  if (info == NULL) {
+      free(child_stat);
+      return TID_ERROR;
+  }
+
 
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
-  if (fn_copy == NULL)
+  if (fn_copy == NULL){
+    free(info);
+    free(child_stat);  
     return TID_ERROR;
+  }
+
   strlcpy (fn_copy, file_name, PGSIZE);
 
+  info->file_name = fn_copy;
+  info->status = child_stat;
 
   // 截斷空格 留前面的真正名稱
   char thread_name[16];
@@ -46,9 +80,15 @@ process_execute (const char *file_name)
 
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (thread_name, PRI_DEFAULT, start_process, fn_copy);
-  // 改成用截斷的name tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
-  if (tid == TID_ERROR)
+  if (tid == TID_ERROR){
     palloc_free_page (fn_copy); 
+    free(info);
+    free(child_stat);
+  } else{
+    child_stat->tid = tid;
+    struct thread* t = thread_current();
+    list_push_back(&t->child_list, &child_stat->elem);
+  }
   return tid;
 }
 
@@ -161,6 +201,7 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
+  // 等child回傳pid  
   while (1);
   return -1;
 }
