@@ -593,6 +593,11 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init(&t->file_descriptor);
   t->next_fd = 2;
 
+  // status初始化
+  list_init(&t->child_list);
+  t->my_status = NULL;
+
+
   old_level = intr_disable ();
   list_push_back (&all_list, &t->allelem);
   intr_set_level (old_level);

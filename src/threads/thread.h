@@ -4,7 +4,7 @@
 #include <debug.h>
 #include <list.h>
 #include <stdint.h>
-
+#include "threads/synch.h"
 /** States in a thread's life cycle. */
 enum thread_status
   {
@@ -36,7 +36,7 @@ struct file_elem
       struct file *file_ptr;
    };
 
-/**代表存在child_list裡面的elem */
+/**代表存在child_list裡面的elem  zombie殘留給parent看的 */
 struct child_status 
 {
    tid_t tid;
@@ -44,8 +44,10 @@ struct child_status
    bool has_exited;
    bool is_waited;  //防止重複 wait
 
-   struct semaphore wait_sema;   // 同步父子號誌
+   struct semaphore wait_sema;   // 同步父子sema
    struct list_elem elem;  // 掛到child_list上  
+
+   int ref_cnt;  //0的時候才釋放這塊
 };
 
 /** A kernel thread or user process.
@@ -140,11 +142,9 @@ struct thread
     int exit_code;   //usrprog要看exitcode
     struct list file_descriptor;   // 紀錄目前開了多少檔案的總表  
     int next_fd;  // 下一個可以使用的fd編號
-    //每個開啟檔案的節點結構
 
 
     // 處理父子p的問題
-    struct thread *parent;
     struct list child_list;
     struct child_status *my_status;
 

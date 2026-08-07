@@ -21,7 +21,7 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-
+struct lock process_lock;
 /**
  * 包裝p_exec要用的fname跟要丟給child的status struct
  */
@@ -49,7 +49,9 @@ process_execute (const char *file_name)
   //初始化struct
   child_stat->has_exited = false;
   child_stat->is_waited = false;
+  child_stat->ref_cnt = 2;
   sema_init(&child_stat->wait_sema, 0);
+  
 
   // 建立exec_info struct
   struct exec_info *info = malloc(sizeof(struct exec_info));
@@ -79,16 +81,18 @@ process_execute (const char *file_name)
   strlcpy (thread_name, file_name, name_len + 1);  // 尾端補\0
 
   /* Create a new thread to execute FILE_NAME. */
-  tid = thread_create (thread_name, PRI_DEFAULT, start_process, fn_copy);
+  tid = thread_create (thread_name, PRI_DEFAULT, start_process, info);
   if (tid == TID_ERROR){
     palloc_free_page (fn_copy); 
     free(info);
     free(child_stat);
   } else{
+    //建立成功 把參數寫進去 並加入list
     child_stat->tid = tid;
     struct thread* t = thread_current();
     list_push_back(&t->child_list, &child_stat->elem);
   }
+  //printf("exec執行完畢");
   return tid;
 }
 
@@ -98,8 +102,12 @@ static void
 start_process (void *file_name_)
 {
   //這塊file是 p_exec 使用palloc得到的實體mem  這裡直接拿來用 
-  //轉回char*
-  char *file_name = file_name_;
+  //轉回包裝的exec_info
+  struct exec_info *info = (struct exec_info *)file_name_;
+  char *file_name = info->file_name;
+  thread_current()->my_status = info->status;
+  free(info);
+
   struct intr_frame if_;
   bool success;
 
@@ -178,7 +186,10 @@ start_process (void *file_name_)
 
 
   palloc_free_page (file_name);
-  hex_dump((uintptr_t)if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
+
+  /* 印出stack結構 確認參數位置*/
+  //hex_dump((uintptr_t)if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
+
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -201,9 +212,46 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  // 等child回傳pid  
-  while (1);
-  return -1;
+  //printf("wait開始");
+  // 等child回傳pid
+  struct thread *cur = thread_current ();  
+  struct list_elem *e;
+  struct child_status *cs;
+  bool found = false;
+  {
+    /* data */
+  };
+  
+  // 重複wait  或找不到指定tid
+  for(e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e= list_next(e)){
+    cs = list_entry(e, struct child_status, elem);
+    if (cs->tid == child_tid){
+      found = true;
+      break;
+    }
+  }
+  if (!found){
+    return -1;
+  }
+  if (cs->is_waited){
+    return -1;
+  }
+  cs->is_waited = true;
+
+  sema_down(&cs->wait_sema);
+
+  // child結束了  回傳exitcode
+  int status = cs->exit_status;
+
+  //把他的空間移出
+  list_remove(e);
+
+  cs->ref_cnt--;
+  if (cs->ref_cnt==0){
+    free(cs);
+  }
+  //printf("wait結束");
+  return status;
 }
 
 /** Free the current process's resources. */
@@ -212,6 +260,39 @@ process_exit (void)
 {
   struct thread *cur = thread_current ();
   uint32_t *pd;
+
+  // child要exit前，傳exitcode並sema叫醒parent
+  if (cur->my_status != NULL){   // idle,main,kernel t沒有my_status
+    cur->my_status->exit_status = cur->exit_code;
+    cur->my_status->has_exited = true;
+    sema_up(&(cur->my_status->wait_sema));
+    cur->my_status->ref_cnt--;
+    if (cur->my_status->ref_cnt == 0){
+      free(cur->my_status);
+    }
+  }
+  // parent要exit前 看自己的childlist有沒有 還沒free的空間
+  while (!list_empty(&cur->child_list)){
+    //list中拿一個elem出來 還原成child_status
+    struct list_elem *e = list_pop_front(&cur->child_list);
+    struct child_status *c_s = list_entry(e, struct child_status, elem);
+    c_s->ref_cnt--;
+    if (c_s->ref_cnt == 0){
+      free(c_s);
+    }
+  }
+
+  // 把自己fd裡面沒關閉的檔案關掉
+  while (!list_empty(&cur->file_descriptor)){
+    //list中拿一個elem出來 還原成fd
+    struct list_elem *e = list_pop_front(&cur->file_descriptor);
+    struct file_elem *f_e = list_entry(e, struct file_elem, elem);
+
+    lock_acquire(&process_lock);
+    file_close(f_e->file_ptr);
+    lock_release(&process_lock);
+    free(f_e);
+  }
 
   /* 如果是userprog才印， kernel不的pagedir=null不用印 */
   if (cur->pagedir != NULL) {
