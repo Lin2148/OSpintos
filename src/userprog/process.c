@@ -69,7 +69,7 @@ process_execute (const char *file_name)
     free(child_stat);  
     return TID_ERROR;
   }
-
+  //copy $2 to $1
   strlcpy (fn_copy, file_name, PGSIZE);
 
   info->file_name = fn_copy;
@@ -187,8 +187,8 @@ start_process (void *file_name_)
 
   palloc_free_page (file_name);
 
-  /* 印出stack結構 確認參數位置*/
-  //hex_dump((uintptr_t)if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
+  /* 印出stack結構 確認參數位置debug用*/
+    //hex_dump((uintptr_t)if_.esp, if_.esp, PHYS_BASE - (uintptr_t)if_.esp, true);
 
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in

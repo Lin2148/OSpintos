@@ -160,6 +160,37 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_READ:
     {
+      //status在stack往下3參數
+      check_valid_ptr((int*)f->esp + 1);
+      check_valid_ptr((int*)f->esp + 2);
+      check_valid_ptr((int*)f->esp + 3);
+      int fd = *((int*) f->esp+1);  
+      void *buffer =*((void**)f->esp+2);
+      unsigned size = *((unsigned*)f->esp + 3);
+
+      check_valid_buffer(buffer, size);
+
+      // 先做從鍵盤讀取部分 fd 0 read from keyboard
+      if (fd == 0){
+        for (int i = 0; i < size; i++) {
+             ((uint8_t *)buffer)[i] = input_getc();
+        }
+      }
+      else{
+        //還原file
+        struct file *file = get_file_by_fd(fd);
+
+        // -1代表EOF以外狀況發生
+        if (file == NULL) {
+          f->eax = -1;
+          break;
+        }
+        
+        //加Lock後呼叫filesys方法
+        lock_acquire(&syscall_lock);
+        f->eax = file_read(file, buffer, size);
+        lock_release(&syscall_lock);
+      }
       break;
     }
     case SYS_WRITE:
@@ -172,29 +203,52 @@ syscall_handler (struct intr_frame *f UNUSED)
       void *buffer =*((void**)f->esp+2);
       unsigned size = *((unsigned*)f->esp + 3);
       
-      // 先實作寫到console的部分
       check_valid_buffer(buffer, size);
-      //Fd 1 writes to the console.
+
+      //先實作寫到console的部分 Fd 1 writes to the console.
       if (fd == 1){
         putbuf(buffer, size);
         f->eax = size;
-      } 
+      } //寫到檔案之類的情況
       else{
+        //還原file
         struct file *file = get_file_by_fd(fd);
+
         // fd=0代表寫入sysin 錯誤狀況
         if (file == NULL) {
           f->eax = 0;
           break;
         }
-        // 正常寫入
+
+        // 加Lock後呼叫filesys方法  正常寫入
         lock_acquire(&syscall_lock);
         f->eax = file_write(file, buffer, size);
         lock_release(&syscall_lock);
       }
       break;
     }
+    //改變檔案接個RW的位置 pos=偏移量
     case SYS_SEEK:
     {
+      check_valid_ptr((int*)f->esp + 1);
+      check_valid_ptr((int*)f->esp + 2);
+      int fd = *((int*) f->esp + 1);  
+      unsigned position = *((unsigned*)f->esp + 2);
+
+      //  fd反找file
+      struct file* cur_file = get_file_by_fd(fd);
+      if ( cur_file == NULL){
+        sys_exit(-1);
+      }
+
+      //因為seek有斷言pos>0 避免pos OF  
+      if (position > (unsigned) 0x7FFFFFFF){
+        sys_exit(-1);
+      }
+
+      lock_acquire(&syscall_lock);
+      file_seek(cur_file, position);
+      lock_release(&syscall_lock);
       break;
     }
     case SYS_TELL:
@@ -254,7 +308,8 @@ syscall_handler (struct intr_frame *f UNUSED)
 }
 
 /**
- * 檢查userprog的ptr是否合法
+ * 檢查userprog傳入的ptr是否合法
+ * 碰到非法空間 終止該操作 
  */
 static void
 check_valid_ptr (const void *vaddr)
