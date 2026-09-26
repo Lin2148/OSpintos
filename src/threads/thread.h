@@ -36,9 +36,14 @@ struct file_elem
       struct file *file_ptr;
    };
 
-/**代表存在child_list裡面的elem  zombie殘留給parent看的 */
+/**存放要給父親看得資訊 代表存在child_list裡面的elem  zombie殘留給parent看的 
+ * 這塊空間是p_exec()呼叫時候 malloc宣告的 所以child thread離開時 這塊空間仍存在
+ * 另外 p_exec() 需要對這個結構裡面的var進行初始化(宣告空間後)
+*/
 struct child_status 
 {
+   // sema變數  要記得在p_exec初始化
+
    tid_t tid;
    int exit_status; 
    bool has_exited;
@@ -46,6 +51,10 @@ struct child_status
 
    struct semaphore wait_sema;   // 同步父子sema
    struct list_elem elem;  // 掛到child_list上  
+
+   //syscall exec使用的sema
+   struct semaphore load_sema;
+   bool load_success;
 
    int ref_cnt;  //0的時候才釋放這塊
 };

@@ -19,7 +19,8 @@ static inline bool is_user_vaddr (const void *);
 void * pagedir_get_page (uint32_t *, const void *); 
 static void check_valid_ptr (const void *);
 static void check_valid_buffer (const void *, unsigned );
-static struct file* get_file_by_fd(int fd);
+static struct file* get_file_by_fd(int );
+static struct child_status* get_child_status_by_tid(tid_t );
 void sys_exit(int);
 
 struct lock syscall_lock;
@@ -67,6 +68,27 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_EXEC:
     {
+      check_valid_ptr((const char*)f->esp + 1);
+      const char *cmd_line = *((char**)f->esp+1);
+      //cmd存放的位置也要在驗證一次
+      check_valid_ptr((const void *)cmd_line);
+
+      // 建立新thread  建立他的執行ELF，stack存放para etc. 
+      tid_t tid = process_execute (cmd_line); 
+      //p_exec裡面tid = t_create ()只是建立t的資料結構但不一定會先執行    所以要sama 等t載入ELF成功 在接收id
+      struct child_status *child = get_child_status_by_tid(tid);
+      if (child != NULL) {
+          // 專心等待載入完成
+          sema_down(&child->load_sema);
+
+          if (child->load_success) {
+              f->eax = tid; // 載入成功
+          } else {
+              f->eax = -1;  // 載入失敗
+          }
+      } else {
+          f->eax = -1;
+      }
       break;
     }
     case SYS_WAIT:
@@ -353,6 +375,24 @@ get_file_by_fd(int fd)
   return NULL;
 }
 
+
+static struct child_status*
+get_child_status_by_tid(tid_t tid) 
+{
+    struct thread *cur = thread_current();
+    struct list_elem *e;
+
+    // 找父的 child_list  看有無該tid的資訊
+    for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e)) {
+        struct child_status *status = list_entry(e, struct child_status, elem);
+        if (status->tid == tid) {
+            return status; 
+        }
+    }
+    
+    // 如果跑完迴圈都沒找到，代表這個 tid 不是他的子行程，或是根本不存在
+    return NULL; 
+}
 
 void 
 sys_exit(int status) 

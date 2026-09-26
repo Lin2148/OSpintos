@@ -51,7 +51,9 @@ process_execute (const char *file_name)
   child_stat->is_waited = false;
   child_stat->ref_cnt = 2;
   sema_init(&child_stat->wait_sema, 0);
-  
+
+  sema_init(&child_stat->load_sema, 0);
+  child_stat->load_success = false;
 
   // 建立exec_info struct
   struct exec_info *info = malloc(sizeof(struct exec_info));
@@ -105,7 +107,8 @@ start_process (void *file_name_)
   //轉回包裝的exec_info
   struct exec_info *info = (struct exec_info *)file_name_;
   char *file_name = info->file_name;
-  thread_current()->my_status = info->status;
+  struct thread *cur = thread_current();
+  cur->my_status = info->status;
   free(info);
 
   struct intr_frame if_;
@@ -140,6 +143,13 @@ start_process (void *file_name_)
     thread_exit ();
   }
 
+  /*下面代表成功了*/
+  
+  //喚起父親 syscall_exec使用
+  if (cur->my_status != NULL) {
+    cur->my_status->load_success = true;
+    sema_up(&cur->my_status->load_sema); 
+}
 
   // 從參數尾端開始push進stack
   for (int i = argc - 1; i >= 0; i--){
