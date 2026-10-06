@@ -13,6 +13,7 @@
 #include "threads/synch.h"
 #include "threads/malloc.h"
 
+#include "userprog/process.h"
 
 static void syscall_handler (struct intr_frame *);
 static inline bool is_user_vaddr (const void *); 
@@ -91,8 +92,13 @@ syscall_handler (struct intr_frame *f UNUSED)
       }
       break;
     }
-    case SYS_WAIT:
+    case SYS_WAIT: // 要處理race問題 可用p.c的 p_wait() 得到exit code
     {
+      check_valid_ptr((tid_t*)f->esp + 1);
+      tid_t pid = *((tid_t*)f->esp+1);
+
+      //看child_list，refcnt等都在wait()裡面做了
+      f->eax = process_wait(pid);
       break;
     }
       case SYS_CREATE:
@@ -249,7 +255,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       }
       break;
     }
-    //改變檔案接個RW的位置 pos=偏移量
+    //改變檔案接著RW的位置 pos=偏移量
     case SYS_SEEK:
     {
       check_valid_ptr((int*)f->esp + 1);

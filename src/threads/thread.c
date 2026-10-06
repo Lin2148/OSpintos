@@ -588,7 +588,7 @@ init_thread (struct thread *t, const char *name, int priority)
   list_init (&t->lock_heldlist);
   t->lock_wait_for = NULL;
   t->magic = THREAD_MAGIC;
-
+  t->exec_file = NULL;  // 不用malloc因為file_open會配置空間給他
   // file descriptor初始化
   list_init(&t->file_descriptor);
   t->next_fd = 2;

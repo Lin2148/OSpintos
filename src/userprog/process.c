@@ -46,7 +46,7 @@ process_execute (const char *file_name)
     return TID_ERROR;
   } 
 
-  //初始化struct
+  //初始化struct  不是t，在init_t()
   child_stat->has_exited = false;
   child_stat->is_waited = false;
   child_stat->ref_cnt = 2;
@@ -57,6 +57,7 @@ process_execute (const char *file_name)
 
   // 建立exec_info struct
   struct exec_info *info = malloc(sizeof(struct exec_info));
+  //malloc失敗
   if (info == NULL) {
       free(child_stat);
       return TID_ERROR;
@@ -135,6 +136,7 @@ start_process (void *file_name_)
   if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
   if_.cs = SEL_UCSEG;
   if_.eflags = FLAG_IF | FLAG_MBS;
+  // executable在這
   success = load (file_name, &if_.eip, &if_.esp);
   
   /* If load failed, quit. */
@@ -143,7 +145,7 @@ start_process (void *file_name_)
     thread_exit ();
   }
 
-  /*下面代表成功了*/
+  /*下面代表成功了 開始arg passing 讓userprog啟動時stack有偽造的資訊可以拿出來*/
   
   //喚起父親 syscall_exec使用
   if (cur->my_status != NULL) {
@@ -222,7 +224,6 @@ start_process (void *file_name_)
 int
 process_wait (tid_t child_tid UNUSED) 
 {
-  //printf("wait開始");
   // 等child回傳pid
   struct thread *cur = thread_current ();  
   struct list_elem *e;
@@ -256,6 +257,7 @@ process_wait (tid_t child_tid UNUSED)
   //把他的空間移出
   list_remove(e);
 
+  //不用這張表了 釋放空間
   cs->ref_cnt--;
   if (cs->ref_cnt==0){
     free(cs);
@@ -281,7 +283,7 @@ process_exit (void)
       free(cur->my_status);
     }
   }
-  // parent要exit前 看自己的childlist有沒有 還沒free的空間
+  // 自己當parent要exit前 看自己的childlist有沒有 還沒free的空間
   while (!list_empty(&cur->child_list)){
     //list中拿一個elem出來 還原成child_status
     struct list_elem *e = list_pop_front(&cur->child_list);
@@ -304,7 +306,12 @@ process_exit (void)
     free(f_e);
   }
 
-  /* 如果是userprog才印， kernel不的pagedir=null不用印 */
+  // 把executable 解除 用close釋放空間(裡面有allow write)
+  if (cur->exec_file != NULL){
+    file_close(cur->exec_file);
+  }
+
+  /* 題目要求 如果是userprog才印， kernel不的pagedir=null不用印 */
   if (cur->pagedir != NULL) {
       printf ("%s: exit(%d)\n", cur->name, cur->exit_code);
     }
@@ -522,7 +529,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
  done:
   /* We arrive here whether the load is successful or not. */
-  file_close (file);
+  //  修改 原本寫法預設關閉 改成正常開啟不關閉 
+  if (success){
+    // load exec成功了 存到t 的struct裡面 並deny write
+    t->exec_file = file;
+    file_deny_write(file);
+  } else{
+    file_close (file);
+  }
+  
   return success;
 }
 

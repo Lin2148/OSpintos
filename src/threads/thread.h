@@ -156,8 +156,9 @@ struct thread
     // 處理父子p的問題
     struct list child_list;
     struct child_status *my_status;
-
-
+   
+    // task5 所需 executable 標記 順序p_exec -> start_p -> load()
+    struct file *exec_file;
 
     /* Owned by thread.c. */
     unsigned magic;                     /**< Detects stack overflow. */
