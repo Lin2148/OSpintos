@@ -21,6 +21,8 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
+void process_init (void);
+
 struct lock process_lock;
 /**
  * 包裝p_exec要用的fname跟要丟給child的status struct
@@ -687,4 +689,11 @@ install_page (void *upage, void *kpage, bool writable)
      address, then map our page there. */
   return (pagedir_get_page (t->pagedir, upage) == NULL
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
+}
+
+
+void
+process_init (void)
+{
+  lock_init (&process_lock);
 }

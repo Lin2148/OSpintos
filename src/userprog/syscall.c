@@ -79,7 +79,7 @@ syscall_handler (struct intr_frame *f UNUSED)
       //p_exec裡面tid = t_create ()只是建立t的資料結構但不一定會先執行    所以要sama 等t載入ELF成功 在接收id
       struct child_status *child = get_child_status_by_tid(tid);
       if (child != NULL) {
-          // 專心等待載入完成
+          // 等待載入完成
           sema_down(&child->load_sema);
 
           if (child->load_success) {
