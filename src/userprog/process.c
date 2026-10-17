@@ -141,19 +141,22 @@ start_process (void *file_name_)
   // executable在這
   success = load (file_name, &if_.eip, &if_.esp);
   
+  // 改位置  先判斷 開鎖後 如果檔案開啟失敗再t_exit
+  //有parent在等結果，喚起父親 syscall_exec使用 
+  if (cur->my_status != NULL) {
+    cur->my_status->load_success = success;
+    sema_up(&cur->my_status->load_sema); 
+}
+
   /* If load failed, quit. */
   if (!success) {
     palloc_free_page (file_name);
-    thread_exit ();
+    sys_exit(-1); 
+    
   }
 
+
   /*下面代表成功了 開始arg passing 讓userprog啟動時stack有偽造的資訊可以拿出來*/
-  
-  //喚起父親 syscall_exec使用
-  if (cur->my_status != NULL) {
-    cur->my_status->load_success = true;
-    sema_up(&cur->my_status->load_sema); 
-}
 
   // 從參數尾端開始push進stack
   for (int i = argc - 1; i >= 0; i--){

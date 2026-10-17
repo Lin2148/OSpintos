@@ -20,6 +20,7 @@ static inline bool is_user_vaddr (const void *);
 void * pagedir_get_page (uint32_t *, const void *); 
 static void check_valid_ptr (const void *);
 static void check_valid_buffer (const void *, unsigned );
+static void check_valid_str (const char *);
 static struct file* get_file_by_fd(int );
 static struct child_status* get_child_status_by_tid(tid_t );
 void sys_exit(int);
@@ -42,8 +43,9 @@ syscall_init (void)
 static void
 syscall_handler (struct intr_frame *f UNUSED) 
 {
-  // 確認合法
-  check_valid_ptr(f->esp);
+  // 確認合法esp  改成檢查4byte 怕中間跨越bound  stack上都是4byte
+  //check_valid_ptr(f->esp);
+  check_valid_buffer(f->esp, sizeof(uint32_t));
   //讀取esp 指向stack top確認哪個中斷num
   int sys_num = *(int*) f->esp;  
   struct thread* t = thread_current();
@@ -61,18 +63,26 @@ syscall_handler (struct intr_frame *f UNUSED)
     // 關閉userprog  status參數存t屬性  沒回傳
     case SYS_EXIT:
     {
+      // check_valid_ptr(f->esp+4);
+
       //status在stack往下4
-      check_valid_ptr(f->esp+4);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       int status = *((int*) f->esp+1);  
       sys_exit(status);
       break;
     }
     case SYS_EXEC:
     {
-      check_valid_ptr((const char*)f->esp + 1);
+      check_valid_buffer((uint32_t *)f->esp + 1, sizeof(uint32_t));
       const char *cmd_line = *((char**)f->esp+1);
-      //cmd存放的位置也要在驗證一次
+
+      /*
       check_valid_ptr((const void *)cmd_line);
+      改成特殊 check_valid_str 檢查直到/0
+      */
+
+      //cmd存放的位置也要在驗證一次
+      check_valid_str((const char *)cmd_line);
 
       // 建立新thread  建立他的執行ELF，stack存放para etc. 
       tid_t tid = process_execute (cmd_line); 
@@ -94,7 +104,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_WAIT: // 要處理race問題 可用p.c的 p_wait() 得到exit code
     {
-      check_valid_ptr((tid_t*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       tid_t pid = *((tid_t*)f->esp+1);
 
       //看child_list，refcnt等都在wait()裡面做了
@@ -103,9 +113,9 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
       case SYS_CREATE:
     {
-      //檢查2參數位置
-      check_valid_ptr((const char*)f->esp + 1);
-      check_valid_ptr((int*)f->esp + 2);
+      // 代表存在stack上的指標是合法，但指過去還要檢查
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 8, sizeof(uint32_t));
       const char *file = *((char**)f->esp+1);
       unsigned initial_size = *((unsigned*)f->esp + 2);
 
@@ -123,7 +133,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_REMOVE:
     {
-      check_valid_ptr((const char*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       const char *file = *((char **)f->esp+1);
       check_valid_ptr((const void*)file);
 
@@ -134,7 +144,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_OPEN:
     {
-      check_valid_ptr((const char*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       const char *file_name = *((char**)f->esp + 1);
       check_valid_ptr((const void*)file_name);
       
@@ -172,7 +182,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_FILESIZE:
     {
-      check_valid_ptr((int*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       int fd = *((int*)f->esp + 1);
 
       // 找不到
@@ -189,9 +199,9 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_READ:
     {
       //status在stack往下3參數
-      check_valid_ptr((int*)f->esp + 1);
-      check_valid_ptr((int*)f->esp + 2);
-      check_valid_ptr((int*)f->esp + 3);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 8, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 12, sizeof(uint32_t));
       int fd = *((int*) f->esp+1);  
       void *buffer =*((void**)f->esp+2);
       unsigned size = *((unsigned*)f->esp + 3);
@@ -224,9 +234,9 @@ syscall_handler (struct intr_frame *f UNUSED)
     case SYS_WRITE:
     {
       //status在stack往下3參數
-      check_valid_ptr((int*)f->esp + 1);
-      check_valid_ptr((int*)f->esp + 2);
-      check_valid_ptr((int*)f->esp + 3);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 8, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 12, sizeof(uint32_t));
       int fd = *((int*) f->esp+1);  
       void *buffer =*((void**)f->esp+2);
       unsigned size = *((unsigned*)f->esp + 3);
@@ -258,8 +268,8 @@ syscall_handler (struct intr_frame *f UNUSED)
     //改變檔案接著RW的位置 pos=偏移量
     case SYS_SEEK:
     {
-      check_valid_ptr((int*)f->esp + 1);
-      check_valid_ptr((int*)f->esp + 2);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
+      check_valid_buffer((uint8_t *) f->esp + 8, sizeof(uint32_t));
       int fd = *((int*) f->esp + 1);  
       unsigned position = *((unsigned*)f->esp + 2);
 
@@ -281,7 +291,8 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_TELL:
     {
-      check_valid_ptr((int*)f->esp + 1);
+      //check_valid_ptr((int*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       int fd = *((int*)f->esp + 1);
 
       //  fd反找file
@@ -297,7 +308,7 @@ syscall_handler (struct intr_frame *f UNUSED)
     }
     case SYS_CLOSE:
     {
-      check_valid_ptr((int*)f->esp + 1);
+      check_valid_buffer((uint8_t *) f->esp + 4, sizeof(uint32_t));
       int fd = *((int*)f->esp + 1);
 
       if (fd ==1 || fd==0){
@@ -363,7 +374,24 @@ check_valid_buffer (const void *buffer, unsigned size)
   }
 }
 
+/**
+ * 檢查寫入的string沒有超過user prog 直到\0
+ */
+static void
+check_valid_str (const char *str)
+{
+  while(true){
+    check_valid_ptr(str);
+    if (*str == '\0'){
+      break;
+    }
+    str++;
+  }
+}
 
+/**
+ * 從當前thread的file descriptor list反找出file
+ */
 static struct file* 
 get_file_by_fd(int fd)
 {
@@ -382,6 +410,10 @@ get_file_by_fd(int fd)
 }
 
 
+/**
+ *  從tid得到 child_status這塊遺留下來的struct  
+ *  解決child先close 或orphan的狀況
+ */
 static struct child_status*
 get_child_status_by_tid(tid_t tid) 
 {
